@@ -1,0 +1,51 @@
+# Obter todos os buckets e datas de criação
+$buckets = aws s3api list-buckets --query "Buckets[*].[Name,CreationDate]" --output json | ConvertFrom-Json
+
+# Criar lista para armazenar informações
+$bucketInfo = @()
+
+foreach ($bucket in $buckets) {
+    $bucketName = $bucket[0]
+    $creationDate = $bucket[1]
+
+    # Obter a região do bucket
+    $regionResponse = aws s3api get-bucket-location --bucket $bucketName --query "LocationConstraint" --output text
+
+    # Ajustar caso a região seja nula (us-east-1 padrão)
+    if (-not $regionResponse -or $regionResponse -eq "None") {
+        $regionResponse = "us-east-1"
+    }
+
+    # Configurar a região para o comando aws s3 ls
+    $env:AWS_DEFAULT_REGION = $regionResponse
+
+    # Inicializar a variável de última modificação
+    $lastModified = ""
+
+    try {
+        # Obter a lista de objetos e extrair datas de modificação
+        $lastModified = aws s3 ls "s3://$bucketName/" --recursive |
+            ForEach-Object {
+                # Extrair apenas linhas que começam com uma data válida (yyyy-MM-dd HH:mm:ss)
+                if ($_ -match "^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}") {
+                    # Pegar a parte da data e converter para DateTime
+                    [DateTime]$($_ -split "\s+")[0..1] -join " "
+                }
+            } | Sort-Object -Descending | Select-Object -First 1
+    } catch {
+        $lastModified = "No objects or access error"
+    }
+
+    # Adicionar informações à lista
+    $bucketInfo += [PSCustomObject]@{
+        BucketName       = $bucketName
+        CreationDate     = $creationDate
+        Region           = $regionResponse
+        LastModifiedDate = $lastModified
+    }
+}
+
+# Exportar informações para um arquivo CSV
+$bucketInfo | Export-Csv -Path "s3_buckets_with_last_modified.csv" -NoTypeInformation -Encoding UTF8
+
+Write-Output "Informações dos buckets salvas em s3_buckets_with_last_modified.csv"
